@@ -1,0 +1,12 @@
+{
+  "name": "aws-devops-demo-app",
+  "version": "1.0.0",
+  "description": "Sample Node.js app for CloudFormation + Ansible + GitHub Actions pipeline",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

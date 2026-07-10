@@ -1,0 +1,81 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-south-1
+  STACK_NAME: devops-project-stack
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudformation/main.yml \
+            --stack-name ${{ env.STACK_NAME }} \
+            --parameter-overrides KeyName=${{ secrets.EC2_KEY_NAME }} \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Get EC2 public IP from stack outputs
+        id: get_ip
+        run: |
+          IP=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='PublicIP'].OutputValue" \
+            --output text)
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+          echo "EC2 public IP is $IP"
+
+      - name: Wait for SSH to become available
+        run: |
+          for i in {1..20}; do
+            nc -z -w5 ${{ steps.get_ip.outputs.ip }} 22 && echo "SSH is up" && break
+            echo "Waiting for SSH..."
+            sleep 15
+          done
+
+      - name: Write SSH private key to file
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > devops-key.pem
+          chmod 600 devops-key.pem
+
+      - name: Write dynamic Ansible inventory
+        run: |
+          echo "[web]" > ansible/inventory.ini
+          echo "${{ steps.get_ip.outputs.ip }} ansible_user=ec2-user" >> ansible/inventory.ini
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Run Ansible playbook
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+            --private-key devops-key.pem \
+            --ssh-common-args='-o StrictHostKeyChecking=no'
+
+      - name: Smoke test the deployed app
+        run: |
+          sleep 5
+          curl -f http://${{ steps.get_ip.outputs.ip }} || (echo "Health check failed" && exit 1)
+
+      - name: Clean up private key
+        if: always()
+        run: rm -f devops-key.pem

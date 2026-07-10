@@ -1,0 +1,75 @@
+---
+- name: Configure EC2 and deploy the app container
+  hosts: web
+  become: true
+  vars:
+    app_image_name: aws-devops-demo-app
+    app_container_name: demo-app
+
+  tasks:
+
+    - name: Install Docker
+      dnf:
+        name: docker
+        state: present
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: true
+
+    - name: Install NGINX
+      dnf:
+        name: nginx
+        state: present
+
+    - name: Deploy NGINX reverse proxy config
+      copy:
+        dest: /etc/nginx/conf.d/app.conf
+        content: |
+          server {
+              listen 80;
+              location / {
+                  proxy_pass http://127.0.0.1:3000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+              }
+          }
+
+    - name: Start and enable NGINX
+      service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Copy application source to server
+      copy:
+        src: "{{ playbook_dir }}/../app/"
+        dest: /home/ec2-user/app/
+        owner: ec2-user
+        group: ec2-user
+
+    - name: Build Docker image
+      command: docker build -t {{ app_image_name }} /home/ec2-user/app
+
+    - name: Stop old container if running
+      command: docker rm -f {{ app_container_name }}
+      ignore_errors: true
+
+    - name: Run app container
+      command: >
+        docker run -d --name {{ app_container_name }}
+        -p 3000:3000 --restart unless-stopped
+        {{ app_image_name }}
+
+    - name: Restart NGINX to pick up config
+      service:
+        name: nginx
+        state: restarted
